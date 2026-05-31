@@ -1,5 +1,6 @@
 const TOKOCRYPTO_TICKERS_URL = "https://www.tokocrypto.site/api/v3/ticker/24hr";
 const TOKOCRYPTO_TRADE_PAGE_URL = "https://www.tokocrypto.com/en/trade/BTC_IDR";
+const COINGECKO_TOKOCRYPTO_TICKERS_URL = "https://api.coingecko.com/api/v3/exchanges/toko_crypto/tickers";
 const REQUEST_TIMEOUT_MS = 12000;
 
 function jsonResponse(payload, status = 200) {
@@ -103,6 +104,19 @@ export async function onRequest(context) {
     }
   }
 
+  const stillMissingAssets = assets.filter((asset) => volumes[asset] == null);
+
+  if (stillMissingAssets.length) {
+    try {
+      const coingeckoVolumes = await getCoinGeckoTokocryptoVolumes(stillMissingAssets);
+      for (const asset of stillMissingAssets) {
+        volumes[asset] = coingeckoVolumes[asset] ?? null;
+      }
+    } catch (error) {
+      errors.push({ exchange: "coingecko-tokocrypto", message: error.message });
+    }
+  }
+
   return jsonResponse({
     source: "tokocrypto-live",
     generatedAt: new Date().toISOString(),
@@ -111,3 +125,28 @@ export async function onRequest(context) {
   });
 }
 
+async function getCoinGeckoTokocryptoVolumes(assets) {
+  const volumes = Object.fromEntries(assets.map((asset) => [asset, null]));
+
+  for (let page = 1; page <= 4; page += 1) {
+    const data = await fetchWithTimeout(`${COINGECKO_TOKOCRYPTO_TICKERS_URL}?page=${page}&depth=false`);
+    const tickers = data?.tickers || [];
+
+    for (const ticker of tickers) {
+      const asset = String(ticker.base || "").toUpperCase();
+
+      if (!assets.includes(asset) || ticker.target !== "IDR") {
+        continue;
+      }
+
+      const idrVolume = Number(ticker.last || 0) * Number(ticker.volume || 0);
+      volumes[asset] = idrVolume > 0 ? toBillions(idrVolume) : null;
+    }
+
+    if (assets.every((asset) => volumes[asset] != null)) {
+      break;
+    }
+  }
+
+  return volumes;
+}
