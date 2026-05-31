@@ -1,0 +1,113 @@
+const TOKOCRYPTO_TICKERS_URL = "https://www.tokocrypto.site/api/v3/ticker/24hr";
+const TOKOCRYPTO_TRADE_PAGE_URL = "https://www.tokocrypto.com/en/trade/BTC_IDR";
+const REQUEST_TIMEOUT_MS = 12000;
+
+function jsonResponse(payload, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, OPTIONS",
+    },
+  });
+}
+
+function toBillions(value) {
+  return Number(value || 0) / 1_000_000_000;
+}
+
+async function fetchWithTimeout(url, responseType = "json") {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: responseType === "text" ? "text/html,*/*" : "application/json,*/*",
+        "user-agent": "Reku Treasury Volume Dashboard/1.0",
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`${url} returned ${response.status}`);
+    }
+
+    return responseType === "text" ? response.text() : response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function getTickerVolume(asset) {
+  const ticker = await fetchWithTimeout(`${TOKOCRYPTO_TICKERS_URL}?symbol=${encodeURIComponent(`${asset}IDR`)}`);
+  return ticker?.quoteVolume ? toBillions(ticker.quoteVolume) : null;
+}
+
+async function getTradePageVolumes(assets) {
+  const html = await fetchWithTimeout(TOKOCRYPTO_TRADE_PAGE_URL, "text");
+
+  return Object.fromEntries(
+    assets.map((asset) => {
+      const symbol = `${asset}IDR`;
+      const symbolMatch = html.match(new RegExp(`"${symbol}"\\s*:\\s*\\{([^{}]+)\\}`));
+      const quoteVolumeMatch = symbolMatch?.[1]?.match(/"quoteVolume"\s*:\s*"([^"]+)"/);
+      return [asset, quoteVolumeMatch ? toBillions(quoteVolumeMatch[1]) : null];
+    })
+  );
+}
+
+export async function onRequest(context) {
+  const { request } = context;
+
+  if (request.method === "OPTIONS") {
+    return jsonResponse({}, 204);
+  }
+
+  const url = new URL(request.url);
+  const assets = (url.searchParams.get("assets") || "")
+    .split(",")
+    .map((asset) => asset.trim().toUpperCase())
+    .filter(Boolean);
+
+  if (!assets.length) {
+    return jsonResponse({ error: "Missing assets query parameter" }, 400);
+  }
+
+  const errors = [];
+  const volumes = {};
+
+  await Promise.all(
+    assets.map(async (asset) => {
+      try {
+        volumes[asset] = await getTickerVolume(asset);
+      } catch (error) {
+        volumes[asset] = null;
+        errors.push({ asset, message: error.message });
+      }
+    })
+  );
+
+  const missingAssets = assets.filter((asset) => volumes[asset] == null);
+
+  if (missingAssets.length) {
+    try {
+      const fallbackVolumes = await getTradePageVolumes(missingAssets);
+      for (const asset of missingAssets) {
+        volumes[asset] = fallbackVolumes[asset] ?? null;
+      }
+    } catch (error) {
+      errors.push({ exchange: "tokocrypto-page", message: error.message });
+    }
+  }
+
+  return jsonResponse({
+    source: "tokocrypto-live",
+    generatedAt: new Date().toISOString(),
+    volumes,
+    errors,
+  });
+}
+
