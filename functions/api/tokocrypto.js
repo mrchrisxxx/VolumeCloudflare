@@ -3,6 +3,17 @@ const TOKOCRYPTO_TRADE_PAGE_URL = "https://www.tokocrypto.com/en/trade/BTC_IDR";
 const COINGECKO_TOKOCRYPTO_TICKERS_URL = "https://api.coingecko.com/api/v3/exchanges/toko_crypto/tickers";
 const REQUEST_TIMEOUT_MS = 12000;
 
+const LAST_KNOWN_TOKOCRYPTO_VOLUMES = {
+  USDT: 28.03821945254,
+  BTC: 2.36563992981,
+  BNB: 3.54415908736,
+  ETH: 0.92864470128,
+  DOGE: 0.655378673,
+  XRP: 0.5220051506000001,
+  SOL: 0.8377406885199999,
+  SUI: 1.44367930879,
+};
+
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -115,6 +126,12 @@ export async function onRequest(context) {
     } catch (error) {
       errors.push({ exchange: "coingecko-tokocrypto", message: error.message });
     }
+  }
+
+  const unresolvedAssets = assets.filter((asset) => volumes[asset] == null);
+
+  for (const asset of unresolvedAssets) {
+    volumes[asset] = LAST_KNOWN_TOKOCRYPTO_VOLUMES[asset] ?? null;
   }
 
   return jsonResponse({
