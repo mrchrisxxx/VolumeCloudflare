@@ -58,7 +58,6 @@ The API should return JSON with:
 
 - The frontend calls `/api/market-data`.
 - The API is implemented as a Cloudflare Pages Function.
-- Reku top 10 ranking is based on Reku market page volume.
+- Reku top 10 ranking is based on `https://api.reku.id/v3/market`.
 - Indodax volume uses `vol_idr`.
 - Tokocrypto first tries per-pair ticker API, then falls back to parsing the public trade page data.
-
